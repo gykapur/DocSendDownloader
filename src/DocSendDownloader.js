@@ -17,16 +17,24 @@ let userIsAuthenticated = () => {
 }
 
 let getSlideImageUrls = async () => {
+    // Fetch all metadata URLs in parallel for much faster performance
+    const metadataPromises = [];
     for(let i=1; i<=numSlides; i++) {
         let url = metadataEndpoint + String(i);
-        await fetch(url)
-        .then((response) => {
-            return response.json();
-        })
-        .then((data) => {
-            slideImageUrls.push(data.imageUrl);
-        })
+        metadataPromises.push(
+            fetch(url)
+                .then((response) => response.json())
+                .then((data) => data.imageUrl)
+                .catch((e) => {
+                    console.error(`Error fetching metadata for slide ${i}:`, e);
+                    return null;
+                })
+        );
     }
+    
+    const results = await Promise.all(metadataPromises);
+    // Filter out any failed requests and maintain order
+    slideImageUrls = results.filter(url => url !== null);
 }
 
 let generateSlideDeckPdf = async () => {

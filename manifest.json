@@ -1,12 +1,14 @@
 {
-  "name": "DocSend Slide Deck Downloader",
-  "version": "2.0",
-  "description": "Download any DocSend slide deck as a PDF",
-  "permissions": ["declarativeNetRequestWithHostAccess", "scripting"],
+  "name": "Slide Deck Downloader",
+  "version": "2.1",
+  "description": "Download DocSend slide decks and Google Slides presentations as PDF",
+  "permissions": ["declarativeNetRequestWithHostAccess", "scripting", "tabs"],
   "host_permissions": [
     "*://*.docsend.com/",
     "*://*.cloudfront.net/*",
-    "*://*.docsend.dropbox.com/*"
+    "*://*.docsend.dropbox.com/*",
+    "*://*.google.com/*",
+    "*://*.googleusercontent.com/*"
   ],
   "background": {
     "service_worker": "service_worker.js",
@@ -22,7 +24,7 @@
     ]
   },
   "action": {
-    "default_title": "Download a DocSend slide deck as a PDF"
+    "default_title": "Download slide deck as PDF"
   },
   "icons": {
     "16": "./assets/icon16.png",
