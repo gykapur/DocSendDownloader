@@ -4,7 +4,6 @@ let slideImageUrls = [];
 
 let slideDeckAlreadyDownloaded = false;
 let slideDeckGenerationInProgress = false;
-let lastAlertMessage = '';
 
 // Detect if we're on a Canva presentation page
 let isCanvaPage = () => {
@@ -20,13 +19,6 @@ let calculateChecksum = (str) => {
         hash = hash & hash; // Convert to 32-bit integer
     }
     return hash.toString();
-};
-
-// Wrapper around showCustomAlert that also remembers the message so we can
-// restore it after hiding for a clean screenshot.
-let showProgress = (message) => {
-    lastAlertMessage = message;
-    showCustomAlert(message);
 };
 
 // Find the bounding rect of the slide area.
@@ -56,14 +48,9 @@ let findSlideRect = () => {
     return bestRect;
 };
 
-// Request a screenshot from the service worker via chrome.tabs.captureVisibleTab.
-// Hides our alert overlay first so it never appears in the capture.
-let captureCleanScreenshot = async () => {
-    // Hide alert so it does not appear in the screenshot
-    hideCustomAlert();
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    const dataUrl = await new Promise((resolve) => {
+// Request a screenshot from the service worker via chrome.tabs.captureVisibleTab
+let captureScreenshot = () => {
+    return new Promise((resolve) => {
         chrome.runtime.sendMessage({ requestType: "CAPTURE_VISIBLE_TAB" }, (response) => {
             if (chrome.runtime.lastError) {
                 console.error('Screenshot request failed:', chrome.runtime.lastError.message);
@@ -73,10 +60,6 @@ let captureCleanScreenshot = async () => {
             resolve(response?.dataUrl || null);
         });
     });
-
-    // Restore alert
-    if (lastAlertMessage) showCustomAlert(lastAlertMessage);
-    return dataUrl;
 };
 
 // Crop a full-page screenshot to just the slide area
@@ -113,7 +96,7 @@ let cropScreenshotToSlide = (screenshotDataUrl, slideRect) => {
 // Returns { image, checksum } using the cropped slide-only image for both.
 let captureSlideWithChecksum = async () => {
     const slideRect = findSlideRect();
-    const screenshot = await captureCleanScreenshot();
+    const screenshot = await captureScreenshot();
     if (!screenshot) return { image: null, checksum: null };
 
     const croppedImage = await cropScreenshotToSlide(screenshot, slideRect);
@@ -197,7 +180,7 @@ let detectAndCaptureSlides = async () => {
         slideImageUrls.push(first.image);
         slideCount = 1;
         previousChecksum = first.checksum;
-        showProgress(`Capturing Canva slides: ${slideCount} captured...`);
+        showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
     } else {
         console.warn('Could not capture first slide');
         return 0;
@@ -223,7 +206,7 @@ let detectAndCaptureSlides = async () => {
                     consecutiveNoChange = 0;
                     previousChecksum = retry.checksum;
                     slideCount++;
-                    showProgress(`Capturing Canva slides: ${slideCount} captured...`);
+                    showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
                     if (retry.image) slideImageUrls.push(retry.image);
                 }
             }
@@ -231,7 +214,7 @@ let detectAndCaptureSlides = async () => {
             consecutiveNoChange = 0;
             previousChecksum = checksum;
             slideCount++;
-            showProgress(`Capturing Canva slides: ${slideCount} captured...`);
+            showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
             if (image) slideImageUrls.push(image);
         }
     }
@@ -242,12 +225,12 @@ let detectAndCaptureSlides = async () => {
 };
 
 let generateSlideDeckPdf = async () => {
-    showProgress('Detecting slides in Canva presentation...');
+    showCustomAlert('Detecting slides in Canva presentation...');
 
     // Wait for page to fully load
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    showProgress('Capturing Canva presentation slides...');
+    showCustomAlert('Capturing Canva presentation slides...');
     const detectedCount = await detectAndCaptureSlides();
 
     if (detectedCount > 0 && slideImageUrls.length > 0) {
