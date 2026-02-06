@@ -2,7 +2,7 @@
   "name": "Slide Deck Downloader",
   "version": "2.1",
   "description": "Download DocSend slide decks, Google Slides, and Canva presentations as PDF",
-  "permissions": ["declarativeNetRequestWithHostAccess", "scripting", "tabs"],
+  "permissions": ["declarativeNetRequestWithHostAccess", "scripting", "tabs", "activeTab"],
   "host_permissions": [
     "*://*.docsend.com/",
     "*://*.cloudfront.net/*",

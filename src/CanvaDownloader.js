@@ -32,7 +32,6 @@ let findSlideCanvas = () => {
     for (const canvas of canvases) {
         const rect = canvas.getBoundingClientRect();
         const area = rect.width * rect.height;
-        // Select the largest visible canvas element (the slide)
         if (area > largestArea && rect.width > 100 && rect.height > 100) {
             largestArea = area;
             largestCanvas = canvas;
@@ -42,112 +41,110 @@ let findSlideCanvas = () => {
     return largestCanvas;
 };
 
-// Check if an element is visible in the viewport
-let isElementVisible = (el) => {
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 &&
-        rect.top < window.innerHeight && rect.bottom > 0 &&
-        rect.left < window.innerWidth && rect.right > 0;
-};
-
-// Try to capture the current slide from canvas element
-let captureFromCanvas = () => {
-    const canvas = findSlideCanvas();
-    if (!canvas) return null;
-
-    try {
-        const dataUrl = canvas.toDataURL('image/png', 1.0);
-        if (dataUrl && dataUrl !== 'data:,') {
-            return dataUrl;
-        }
-    } catch (e) {
-        console.warn('Canvas capture failed (possibly tainted):', e.message);
-    }
-    return null;
-};
-
-// Fallback: try to capture from image elements in the slide container
-let captureFromDOM = async () => {
-    const images = document.querySelectorAll('img');
-    let slideImage = null;
-    let largestArea = 0;
-
-    for (const img of images) {
-        const rect = img.getBoundingClientRect();
-        const area = rect.width * rect.height;
-        if (area > largestArea && rect.width > 200 && rect.height > 100 && isElementVisible(img)) {
-            largestArea = area;
-            slideImage = img;
-        }
-    }
-
-    if (slideImage && slideImage.src) {
-        try {
-            const response = await fetch(slideImage.src);
-            const blob = await response.blob();
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.onerror = reject;
-                reader.readAsDataURL(blob);
-            });
-        } catch (e) {
-            console.warn('Failed to fetch slide image:', e);
-        }
-    }
-
-    return null;
-};
-
-// Get a checksum of the current visible slide content
-let getSlideChecksum = () => {
-    const canvas = findSlideCanvas();
-    if (canvas) {
-        try {
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                // Sample a small region of the canvas for a fast checksum
-                const sampleWidth = Math.min(canvas.width, 100);
-                const sampleHeight = Math.min(canvas.height, 100);
-                const imageData = ctx.getImageData(0, 0, sampleWidth, sampleHeight);
-                return calculateChecksum(Array.from(imageData.data.slice(0, 1000)).join(','));
+// Request a screenshot from the service worker via chrome.tabs.captureVisibleTab
+let captureScreenshot = () => {
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage({ requestType: "CAPTURE_VISIBLE_TAB" }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error('Screenshot request failed:', chrome.runtime.lastError.message);
+                resolve(null);
+                return;
             }
-        } catch (e) {
-            // Canvas may be tainted; fall back to DOM-based checksum
+            resolve(response?.dataUrl || null);
+        });
+    });
+};
+
+// Crop a full-page screenshot to just the slide canvas area
+let cropScreenshotToSlide = (screenshotDataUrl) => {
+    const canvas = findSlideCanvas();
+    if (!canvas) return Promise.resolve(screenshotDataUrl);
+
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const cropCanvas = document.createElement('canvas');
+            const cropW = Math.round(rect.width * dpr);
+            const cropH = Math.round(rect.height * dpr);
+            cropCanvas.width = cropW;
+            cropCanvas.height = cropH;
+
+            const ctx = cropCanvas.getContext('2d');
+            ctx.drawImage(
+                img,
+                Math.round(rect.left * dpr), Math.round(rect.top * dpr),
+                cropW, cropH,
+                0, 0,
+                cropW, cropH
+            );
+            resolve(cropCanvas.toDataURL('image/png'));
+        };
+        img.onerror = () => resolve(screenshotDataUrl);
+        img.src = screenshotDataUrl;
+    });
+};
+
+// Capture the current slide: screenshot the tab then crop to the slide area
+let captureCurrentSlide = async () => {
+    const screenshot = await captureScreenshot();
+    if (!screenshot) return null;
+    return cropScreenshotToSlide(screenshot);
+};
+
+// Dispatch a keyboard event on multiple targets so Canva's listeners pick it up
+let sendKey = (key, code, keyCode) => {
+    const opts = { key, code, keyCode, bubbles: true, cancelable: true, composed: true };
+    const event = () => new KeyboardEvent('keydown', opts);
+    document.dispatchEvent(event());
+    document.body.dispatchEvent(event());
+    window.dispatchEvent(event());
+    if (document.activeElement && document.activeElement !== document.body && document.activeElement !== document.documentElement) {
+        document.activeElement.dispatchEvent(event());
+    }
+};
+
+// Try to click a navigation button in the DOM as fallback for keyboard nav
+let clickNavButton = (direction) => {
+    const buttons = document.querySelectorAll('button, [role="button"], [aria-label]');
+    for (const btn of buttons) {
+        const label = (btn.getAttribute('aria-label') || btn.textContent || '').toLowerCase();
+        if (direction === 'next' && (label.includes('next') || label.includes('forward'))) {
+            btn.click();
+            return true;
+        }
+        if (direction === 'prev' && (label.includes('prev') || label.includes('back'))) {
+            btn.click();
+            return true;
         }
     }
-
-    // Fallback: checksum based on visible image sources
-    const images = document.querySelectorAll('img');
-    const visibleSrcs = Array.from(images)
-        .filter(img => isElementVisible(img))
-        .map(img => img.src)
-        .join('|');
-    if (visibleSrcs.length > 0) {
-        return calculateChecksum(visibleSrcs);
-    }
-
-    return null;
+    return false;
 };
 
-// Capture the current slide using best available method
-let captureCurrentSlide = async () => {
-    // Try canvas capture first (primary method for Canva)
-    let slideData = captureFromCanvas();
-    if (slideData) return slideData;
-
-    // Fall back to DOM image capture
-    slideData = await captureFromDOM();
-    return slideData;
+// Navigate to the next slide using keyboard + button click fallback
+let goToNextSlide = () => {
+    sendKey('ArrowRight', 'ArrowRight', 39);
+    clickNavButton('next');
 };
 
-// Send a keyboard event to navigate slides
-let sendKey = (key, code, keyCode) => {
-    document.dispatchEvent(new KeyboardEvent('keydown', {
-        key, code, keyCode,
-        bubbles: true,
-        cancelable: true
-    }));
+// Navigate to the previous slide
+let goToPrevSlide = () => {
+    sendKey('ArrowLeft', 'ArrowLeft', 37);
+    clickNavButton('prev');
+};
+
+// Get a checksum of the current screenshot for slide-change detection
+let getSlideChecksum = async () => {
+    const screenshot = await captureScreenshot();
+    if (!screenshot) return null;
+    // Use a sample from the middle of the data URL for a fast checksum
+    const sample = screenshot.substring(
+        Math.floor(screenshot.length * 0.3),
+        Math.floor(screenshot.length * 0.3) + 2000
+    );
+    return calculateChecksum(sample);
 };
 
 // Navigate through all slides and capture each one
@@ -161,15 +158,15 @@ let detectAndCaptureSlides = async () => {
 
     // Press ArrowLeft many times to ensure we are at the very beginning
     for (let i = 0; i < 50; i++) {
-        sendKey('ArrowLeft', 'ArrowLeft', 37);
+        goToPrevSlide();
         await new Promise(resolve => setTimeout(resolve, 100));
     }
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     let slideCount = 0;
     let previousChecksum = null;
     let consecutiveNoChange = 0;
-    const maxNoChange = 3; // Stop after 3 consecutive presses with no change
+    const maxNoChange = 3;
 
     // Capture first slide
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -177,29 +174,29 @@ let detectAndCaptureSlides = async () => {
     if (firstSlide) {
         slideImageUrls.push(firstSlide);
         slideCount = 1;
-        previousChecksum = getSlideChecksum();
+        previousChecksum = await getSlideChecksum();
         showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
     } else {
         console.warn('Could not capture first slide');
         return 0;
     }
 
-    // Cycle through remaining slides using ArrowRight
+    // Cycle through remaining slides
     while (consecutiveNoChange < maxNoChange && slideCount < 500) {
-        sendKey('ArrowRight', 'ArrowRight', 39);
+        goToNextSlide();
         await new Promise(resolve => setTimeout(resolve, 1500));
 
-        const currentChecksum = getSlideChecksum();
+        const currentChecksum = await getSlideChecksum();
 
         if (currentChecksum === previousChecksum) {
             consecutiveNoChange++;
             console.log(`No slide change detected (${consecutiveNoChange}/${maxNoChange})`);
 
             if (consecutiveNoChange < maxNoChange) {
-                // Retry navigation in case it was slow to respond
-                sendKey('ArrowRight', 'ArrowRight', 39);
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                const retryChecksum = getSlideChecksum();
+                // Retry navigation in case it was slow
+                goToNextSlide();
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                const retryChecksum = await getSlideChecksum();
                 if (retryChecksum !== previousChecksum) {
                     consecutiveNoChange = 0;
                     previousChecksum = retryChecksum;

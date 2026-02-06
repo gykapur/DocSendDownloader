@@ -213,6 +213,16 @@ const executeJob = () => {
     })
 }
 
+// Handle messages from content scripts (e.g. screenshot requests for Canva)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.requestType === "CAPTURE_VISIBLE_TAB") {
+        chrome.tabs.captureVisibleTab(null, { format: 'png', quality: 100 }, (dataUrl) => {
+            sendResponse({ dataUrl });
+        });
+        return true; // Keep channel open for async sendResponse
+    }
+});
+
 chrome.action.onClicked.addListener(async () => {
     // Get the current active tab and check if we're on a supported slide deck page
     const tabs = await chrome.tabs.query({active: true, currentWindow: true});
