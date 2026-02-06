@@ -29,59 +29,31 @@ let showProgress = (message) => {
     showCustomAlert(message);
 };
 
-// Find the bounding rect of the slide area using multiple strategies.
-// Returns a DOMRect or null.
+// Find the bounding rect of the slide area.
+// Canva scales its slide container with transform: scale(...), so we look
+// for the largest div that carries a scale transform.  Returns a DOMRect or null.
 let findSlideRect = () => {
-    // Strategy 1: largest canvas element
-    const canvases = document.querySelectorAll('canvas');
     let bestRect = null;
     let bestArea = 0;
 
-    for (const canvas of canvases) {
-        const rect = canvas.getBoundingClientRect();
+    const divs = document.querySelectorAll('div');
+    for (const div of divs) {
+        const transform = div.style.transform || getComputedStyle(div).transform;
+        if (!transform || transform === 'none') continue;
+
+        // Match transform values that contain a scale component
+        // Covers: scale(0.5), matrix(0.5, 0, 0, 0.5, ...), scaleX, scaleY etc.
+        if (!/scale|matrix/.test(transform)) continue;
+
+        const rect = div.getBoundingClientRect();
         const area = rect.width * rect.height;
         if (area > bestArea && rect.width > 100 && rect.height > 100) {
             bestArea = area;
             bestRect = rect;
         }
     }
-    if (bestRect) return bestRect;
 
-    // Strategy 2: probe the center of the viewport with elementsFromPoint
-    // and pick the deepest element that has a slide-like aspect ratio.
-    const centerX = window.innerWidth / 2;
-    const centerY = window.innerHeight / 2;
-    const elements = document.elementsFromPoint(centerX, centerY);
-
-    for (const el of elements) {
-        if (el === document.body || el === document.documentElement) continue;
-        // Skip our own injected alert overlay
-        if (el === customAlertContainer || el === customAlertContainerText) continue;
-        if (el.closest && el.closest('.row.alert.alert-info')) continue;
-
-        const rect = el.getBoundingClientRect();
-        if (rect.width < 200 || rect.height < 100) continue;
-
-        const aspect = rect.width / rect.height;
-        // Accept aspect ratios in the range ~4:3 (1.25) to ~16:9 (1.85)
-        if (aspect >= 1.2 && aspect <= 2.0) {
-            return rect;
-        }
-    }
-
-    // Strategy 3: largest iframe (Canva may render inside one)
-    const iframes = document.querySelectorAll('iframe');
-    for (const iframe of iframes) {
-        const rect = iframe.getBoundingClientRect();
-        const area = rect.width * rect.height;
-        if (area > bestArea && rect.width > 200 && rect.height > 100) {
-            bestArea = area;
-            bestRect = rect;
-        }
-    }
-    if (bestRect) return bestRect;
-
-    return null;
+    return bestRect;
 };
 
 // Request a screenshot from the service worker via chrome.tabs.captureVisibleTab.
