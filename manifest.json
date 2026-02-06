@@ -1,14 +1,15 @@
 {
   "name": "Slide Deck Downloader",
   "version": "2.1",
-  "description": "Download DocSend slide decks and Google Slides presentations as PDF",
+  "description": "Download DocSend slide decks, Google Slides, and Canva presentations as PDF",
   "permissions": ["declarativeNetRequestWithHostAccess", "scripting", "tabs"],
   "host_permissions": [
     "*://*.docsend.com/",
     "*://*.cloudfront.net/*",
     "*://*.docsend.dropbox.com/*",
     "*://*.google.com/*",
-    "*://*.googleusercontent.com/*"
+    "*://*.googleusercontent.com/*",
+    "*://*.canva.com/*"
   ],
   "background": {
     "service_worker": "service_worker.js",

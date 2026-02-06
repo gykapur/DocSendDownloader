@@ -18,6 +18,14 @@ const googleSlidesScriptsToInject = [
     "./src/GoogleSlidesDownloader.js"
 ];
 
+const canvaScriptsToInject = [
+    "./modules/pdfkit.js",
+    "./modules/blob-stream.js",
+    "./src/ModifyDocSendView.js",
+    "./src/GeneratePDF.js",
+    "./src/CanvaDownloader.js"
+];
+
 // Check if URL is a DocSend page
 const isDocSendPage = (url) => {
     if (!url) return false;
@@ -42,9 +50,21 @@ const isGoogleSlidesPage = (url) => {
     }
 };
 
+// Check if URL is a Canva presentation page
+const isCanvaPage = (url) => {
+    if (!url) return false;
+    try {
+        const urlObj = new URL(url);
+        return urlObj.hostname.includes('canva.com') &&
+               urlObj.pathname.includes('/design/');
+    } catch {
+        return false;
+    }
+};
+
 // Check if URL is a supported slide deck page
 const isSupportedSlideDeckPage = (url) => {
-    return isDocSendPage(url) || isGoogleSlidesPage(url);
+    return isDocSendPage(url) || isGoogleSlidesPage(url) || isCanvaPage(url);
 };
 
 // Create a greyed out version of an icon as ImageData
@@ -101,6 +121,8 @@ const updateIcon = async (tabId) => {
                 title = "Download a DocSend slide deck as a PDF";
             } else if (isGoogleSlidesPage(tab.url)) {
                 title = "Download a Google Slides presentation as a PDF";
+            } else if (isCanvaPage(tab.url)) {
+                title = "Download a Canva presentation as a PDF";
             }
             chrome.action.setTitle({
                 tabId: tabId,
@@ -160,7 +182,9 @@ const executeJob = () => {
 
         // Determine which scripts to inject based on the page type
         let scriptsToInject;
-        if (isGoogleSlidesPage(currentUrl)) {
+        if (isCanvaPage(currentUrl)) {
+            scriptsToInject = canvaScriptsToInject;
+        } else if (isGoogleSlidesPage(currentUrl)) {
             scriptsToInject = googleSlidesScriptsToInject;
         } else if (isDocSendPage(currentUrl)) {
             scriptsToInject = docSendScriptsToInject;
