@@ -4,6 +4,7 @@ let slideImageUrls = [];
 
 let slideDeckAlreadyDownloaded = false;
 let slideDeckGenerationInProgress = false;
+let lastAlertMessage = '';
 
 // Detect if we're on a Canva presentation page
 let isCanvaPage = () => {
@@ -21,29 +22,76 @@ let calculateChecksum = (str) => {
     return hash.toString();
 };
 
-// Find the main canvas element that renders the current slide
-let findSlideCanvas = () => {
-    const canvases = document.querySelectorAll('canvas');
-    if (canvases.length === 0) return null;
+// Wrapper around showCustomAlert that also remembers the message so we can
+// restore it after hiding for a clean screenshot.
+let showProgress = (message) => {
+    lastAlertMessage = message;
+    showCustomAlert(message);
+};
 
-    let largestCanvas = null;
-    let largestArea = 0;
+// Find the bounding rect of the slide area using multiple strategies.
+// Returns a DOMRect or null.
+let findSlideRect = () => {
+    // Strategy 1: largest canvas element
+    const canvases = document.querySelectorAll('canvas');
+    let bestRect = null;
+    let bestArea = 0;
 
     for (const canvas of canvases) {
         const rect = canvas.getBoundingClientRect();
         const area = rect.width * rect.height;
-        if (area > largestArea && rect.width > 100 && rect.height > 100) {
-            largestArea = area;
-            largestCanvas = canvas;
+        if (area > bestArea && rect.width > 100 && rect.height > 100) {
+            bestArea = area;
+            bestRect = rect;
+        }
+    }
+    if (bestRect) return bestRect;
+
+    // Strategy 2: probe the center of the viewport with elementsFromPoint
+    // and pick the deepest element that has a slide-like aspect ratio.
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
+    const elements = document.elementsFromPoint(centerX, centerY);
+
+    for (const el of elements) {
+        if (el === document.body || el === document.documentElement) continue;
+        // Skip our own injected alert overlay
+        if (el === customAlertContainer || el === customAlertContainerText) continue;
+        if (el.closest && el.closest('.row.alert.alert-info')) continue;
+
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 200 || rect.height < 100) continue;
+
+        const aspect = rect.width / rect.height;
+        // Accept aspect ratios in the range ~4:3 (1.25) to ~16:9 (1.85)
+        if (aspect >= 1.2 && aspect <= 2.0) {
+            return rect;
         }
     }
 
-    return largestCanvas;
+    // Strategy 3: largest iframe (Canva may render inside one)
+    const iframes = document.querySelectorAll('iframe');
+    for (const iframe of iframes) {
+        const rect = iframe.getBoundingClientRect();
+        const area = rect.width * rect.height;
+        if (area > bestArea && rect.width > 200 && rect.height > 100) {
+            bestArea = area;
+            bestRect = rect;
+        }
+    }
+    if (bestRect) return bestRect;
+
+    return null;
 };
 
-// Request a screenshot from the service worker via chrome.tabs.captureVisibleTab
-let captureScreenshot = () => {
-    return new Promise((resolve) => {
+// Request a screenshot from the service worker via chrome.tabs.captureVisibleTab.
+// Hides our alert overlay first so it never appears in the capture.
+let captureCleanScreenshot = async () => {
+    // Hide alert so it does not appear in the screenshot
+    hideCustomAlert();
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    const dataUrl = await new Promise((resolve) => {
         chrome.runtime.sendMessage({ requestType: "CAPTURE_VISIBLE_TAB" }, (response) => {
             if (chrome.runtime.lastError) {
                 console.error('Screenshot request failed:', chrome.runtime.lastError.message);
@@ -53,29 +101,31 @@ let captureScreenshot = () => {
             resolve(response?.dataUrl || null);
         });
     });
+
+    // Restore alert
+    if (lastAlertMessage) showCustomAlert(lastAlertMessage);
+    return dataUrl;
 };
 
-// Crop a full-page screenshot to just the slide canvas area
-let cropScreenshotToSlide = (screenshotDataUrl) => {
-    const canvas = findSlideCanvas();
-    if (!canvas) return Promise.resolve(screenshotDataUrl);
+// Crop a full-page screenshot to just the slide area
+let cropScreenshotToSlide = (screenshotDataUrl, slideRect) => {
+    if (!slideRect) return Promise.resolve(screenshotDataUrl);
 
-    const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
 
     return new Promise((resolve) => {
         const img = new Image();
         img.onload = () => {
             const cropCanvas = document.createElement('canvas');
-            const cropW = Math.round(rect.width * dpr);
-            const cropH = Math.round(rect.height * dpr);
+            const cropW = Math.round(slideRect.width * dpr);
+            const cropH = Math.round(slideRect.height * dpr);
             cropCanvas.width = cropW;
             cropCanvas.height = cropH;
 
             const ctx = cropCanvas.getContext('2d');
             ctx.drawImage(
                 img,
-                Math.round(rect.left * dpr), Math.round(rect.top * dpr),
+                Math.round(slideRect.left * dpr), Math.round(slideRect.top * dpr),
                 cropW, cropH,
                 0, 0,
                 cropW, cropH
@@ -88,13 +138,13 @@ let cropScreenshotToSlide = (screenshotDataUrl) => {
 };
 
 // Capture the current slide and compute its checksum in one shot.
-// Returns { image, checksum } using the cropped slide-only image for both,
-// so the changing alert overlay never pollutes the comparison.
+// Returns { image, checksum } using the cropped slide-only image for both.
 let captureSlideWithChecksum = async () => {
-    const screenshot = await captureScreenshot();
+    const slideRect = findSlideRect();
+    const screenshot = await captureCleanScreenshot();
     if (!screenshot) return { image: null, checksum: null };
 
-    const croppedImage = await cropScreenshotToSlide(screenshot);
+    const croppedImage = await cropScreenshotToSlide(screenshot, slideRect);
 
     // Checksum a sample from the cropped image (slide content only)
     const sample = croppedImage.substring(
@@ -175,7 +225,7 @@ let detectAndCaptureSlides = async () => {
         slideImageUrls.push(first.image);
         slideCount = 1;
         previousChecksum = first.checksum;
-        showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
+        showProgress(`Capturing Canva slides: ${slideCount} captured...`);
     } else {
         console.warn('Could not capture first slide');
         return 0;
@@ -201,7 +251,7 @@ let detectAndCaptureSlides = async () => {
                     consecutiveNoChange = 0;
                     previousChecksum = retry.checksum;
                     slideCount++;
-                    showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
+                    showProgress(`Capturing Canva slides: ${slideCount} captured...`);
                     if (retry.image) slideImageUrls.push(retry.image);
                 }
             }
@@ -209,7 +259,7 @@ let detectAndCaptureSlides = async () => {
             consecutiveNoChange = 0;
             previousChecksum = checksum;
             slideCount++;
-            showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
+            showProgress(`Capturing Canva slides: ${slideCount} captured...`);
             if (image) slideImageUrls.push(image);
         }
     }
@@ -220,12 +270,12 @@ let detectAndCaptureSlides = async () => {
 };
 
 let generateSlideDeckPdf = async () => {
-    showCustomAlert('Detecting slides in Canva presentation...');
+    showProgress('Detecting slides in Canva presentation...');
 
     // Wait for page to fully load
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    showCustomAlert('Capturing Canva presentation slides...');
+    showProgress('Capturing Canva presentation slides...');
     const detectedCount = await detectAndCaptureSlides();
 
     if (detectedCount > 0 && slideImageUrls.length > 0) {
