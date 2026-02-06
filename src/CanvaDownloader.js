@@ -87,11 +87,23 @@ let cropScreenshotToSlide = (screenshotDataUrl) => {
     });
 };
 
-// Capture the current slide: screenshot the tab then crop to the slide area
-let captureCurrentSlide = async () => {
+// Capture the current slide and compute its checksum in one shot.
+// Returns { image, checksum } using the cropped slide-only image for both,
+// so the changing alert overlay never pollutes the comparison.
+let captureSlideWithChecksum = async () => {
     const screenshot = await captureScreenshot();
-    if (!screenshot) return null;
-    return cropScreenshotToSlide(screenshot);
+    if (!screenshot) return { image: null, checksum: null };
+
+    const croppedImage = await cropScreenshotToSlide(screenshot);
+
+    // Checksum a sample from the cropped image (slide content only)
+    const sample = croppedImage.substring(
+        Math.floor(croppedImage.length * 0.3),
+        Math.floor(croppedImage.length * 0.3) + 2000
+    );
+    const checksum = calculateChecksum(sample);
+
+    return { image: croppedImage, checksum };
 };
 
 // Dispatch a keyboard event on multiple targets so Canva's listeners pick it up
@@ -135,18 +147,6 @@ let goToPrevSlide = () => {
     clickNavButton('prev');
 };
 
-// Get a checksum of the current screenshot for slide-change detection
-let getSlideChecksum = async () => {
-    const screenshot = await captureScreenshot();
-    if (!screenshot) return null;
-    // Use a sample from the middle of the data URL for a fast checksum
-    const sample = screenshot.substring(
-        Math.floor(screenshot.length * 0.3),
-        Math.floor(screenshot.length * 0.3) + 2000
-    );
-    return calculateChecksum(sample);
-};
-
 // Navigate through all slides and capture each one
 let detectAndCaptureSlides = async () => {
     console.log('Detecting and capturing Canva slides...');
@@ -170,11 +170,11 @@ let detectAndCaptureSlides = async () => {
 
     // Capture first slide
     await new Promise(resolve => setTimeout(resolve, 1000));
-    const firstSlide = await captureCurrentSlide();
-    if (firstSlide) {
-        slideImageUrls.push(firstSlide);
+    const first = await captureSlideWithChecksum();
+    if (first.image) {
+        slideImageUrls.push(first.image);
         slideCount = 1;
-        previousChecksum = await getSlideChecksum();
+        previousChecksum = first.checksum;
         showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
     } else {
         console.warn('Could not capture first slide');
@@ -186,9 +186,9 @@ let detectAndCaptureSlides = async () => {
         goToNextSlide();
         await new Promise(resolve => setTimeout(resolve, 1500));
 
-        const currentChecksum = await getSlideChecksum();
+        const { image, checksum } = await captureSlideWithChecksum();
 
-        if (currentChecksum === previousChecksum) {
+        if (checksum === previousChecksum) {
             consecutiveNoChange++;
             console.log(`No slide change detected (${consecutiveNoChange}/${maxNoChange})`);
 
@@ -196,23 +196,21 @@ let detectAndCaptureSlides = async () => {
                 // Retry navigation in case it was slow
                 goToNextSlide();
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                const retryChecksum = await getSlideChecksum();
-                if (retryChecksum !== previousChecksum) {
+                const retry = await captureSlideWithChecksum();
+                if (retry.checksum !== previousChecksum) {
                     consecutiveNoChange = 0;
-                    previousChecksum = retryChecksum;
+                    previousChecksum = retry.checksum;
                     slideCount++;
                     showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
-                    const slideData = await captureCurrentSlide();
-                    if (slideData) slideImageUrls.push(slideData);
+                    if (retry.image) slideImageUrls.push(retry.image);
                 }
             }
         } else {
             consecutiveNoChange = 0;
-            previousChecksum = currentChecksum;
+            previousChecksum = checksum;
             slideCount++;
             showCustomAlert(`Capturing Canva slides: ${slideCount} captured...`);
-            const slideData = await captureCurrentSlide();
-            if (slideData) slideImageUrls.push(slideData);
+            if (image) slideImageUrls.push(image);
         }
     }
 
